@@ -10,16 +10,25 @@ import (
 	"time"
 
 	"github.com/Hoaqim/link-archiver/internal/httpapi"
+	"github.com/Hoaqim/link-archiver/internal/queue"
 )
 
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	q, err := queue.NewRedisQueue(os.Getenv("REDIS_ADDR"), "queue:jobs")
+
+	if err != nil {
+		logger.Error(err.Error())
+	}
+	defer q.Close()
+
 	srv := &httpapi.Server{
 		Logger: logger,
+		Queue:  q,
 	}
 
 	httpServer := &http.Server{
-		Addr:              ":8080",
+		Addr:              os.Getenv("HTTP_SERVER_ADDR"),
 		Handler:           srv.Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
