@@ -25,7 +25,7 @@ jobs:
 
   build-and-push:
     needs: test
-    if: github.event_name == 'push' && github.ref == 'refs/head/main'
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -45,7 +45,7 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: .
-          file: ${{ matrix.component }}.Dockerfile
+          file: deploy/${{ matrix.component }}.Dockerfile
           push: true
           tags: ${{ env.ECR_REGISTRY }}/myapp/${{ matrix.component }}:${{ steps.meta.outputs.tag }}
           provenance: false

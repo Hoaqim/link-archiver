@@ -6,6 +6,6 @@ COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /out/worker ./cmd/worker
 
 FROM gcr.io/distroless/static-debian12:nonroot
-COPY --from=builder /out/api /api
+COPY --from=builder /out/worker /worker
 USER nonroot:nonroot
 ENTRYPOINT ["/worker"]
