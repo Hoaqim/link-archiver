@@ -1,0 +1,57 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  AWS_REGION: eu-central-1
+  ECR_REGISTRY: 137583030918.dkr.ecr.eu-central-1.amazonaws.com
+
+jobs: 
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+      - run: go test ./...
+
+  build-and-push:
+    needs: test
+    if: github.event_name == 'push' && github.ref == 'refs/head/main'
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        component: [api, worker]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::137583030918:role/github-actions-myapp-ci
+      - uses: aws-actions/amazon-ecr-login@v2
+      - uses: docker/setup-buildx-action@v3
+      
+      - id: meta
+        run: echo "tag=sha-$(echo ${{ github.sha }} | cut -c1-7)" >> $GITHUB_OUTPUT
+      
+      - id: build
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ${{ matrix.component }}.Dockerfile
+          push: true
+          tags: ${{ env.ECR_REGISTRY }}/myapp/${{ matrix.component }}:${{ steps.meta.outputs.tag }}
+          provenance: false
+      
+      - uses: sigstore/cosign-installer@v3
+      - name: Sign image
+        run: |
+          cosign sign --yes \
+            ${{ env.ECR_REGISTRY }}/myapp/${{ matrix.component }}@${{ steps.build.outputs.digest }}
