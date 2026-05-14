@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/Hoaqim/link-archiver/internal/queue"
+	"github.com/google/uuid"
 )
 
 func (s *Server) Health(w http.ResponseWriter, r *http.Request) {
@@ -32,7 +33,10 @@ func (s *Server) CreateJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var job queue.Job
+	job := queue.Job{
+		ID:  uuid.NewString(),
+		URL: req.URL,
+	}
 	payload, err := json.Marshal(job)
 	if err != nil {
 		s.Logger.Error("Marshal job error", "err", err)
