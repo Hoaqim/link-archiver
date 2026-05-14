@@ -9,6 +9,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Hoaqim/link-archiver/internal/archiver"
 	"github.com/Hoaqim/link-archiver/internal/queue"
 )
 
@@ -38,19 +39,35 @@ func main() {
 			continue
 		}
 
-		if err := process(ctx, logger, payload); err != nil {
+		arch := archiver.NewArchiver(30*time.Second, 10*1024*1024)
+		if err := process(ctx, logger, arch, payload); err != nil {
 			logger.Error("process job", "err", err)
 			//TODO: dead letter queue, retry
 		}
 	}
 }
 
-func process(ctx context.Context, logger *slog.Logger, payload []byte) error {
+func process(ctx context.Context, logger *slog.Logger, arch *archiver.Archiver, payload []byte) error {
 	var job queue.Job
 	if err := json.Unmarshal(payload, &job); err != nil {
 		return err
 	}
 	logger.Info("Processing job", "id", job.ID, "url", job.URL)
-	//TODO: fetch, store url, etc
+
+	result, err := arch.Fetch(ctx, job.URL)
+	if err != nil {
+		logger.Error("Fetch error", "err", err)
+		return err
+	}
+
+	logger.Info("Fetched:",
+		"id", job.ID,
+		"url", result.URL,
+		"statusCode", result.StatusCode,
+		"contentType", result.ContentType,
+		"fetchedat", result.FetchedAt,
+		"body", result.Body,
+	)
+	//TODO: storage instead of logg
 	return nil
 }
