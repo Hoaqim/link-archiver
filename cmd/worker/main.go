@@ -2,8 +2,7 @@ package main
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
+	"errors"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -11,76 +10,72 @@ import (
 	"time"
 
 	"github.com/Hoaqim/link-archiver/internal/archiver"
+	"github.com/Hoaqim/link-archiver/internal/config"
 	"github.com/Hoaqim/link-archiver/internal/queue"
 	"github.com/Hoaqim/link-archiver/internal/storage"
+	"github.com/Hoaqim/link-archiver/internal/worker"
 )
 
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
-	q, err := queue.NewRedisQueue(os.Getenv("REDIS_ADDR"), "queue:jobs")
-	var store storage.Storage
-	switch os.Getenv("STORAGE_BACKEND") {
-	case "s3":
-		// store, err = storage.NewS3(...)
-		logger.Error("s3 not implemented yet")
-		os.Exit(1)
-	default:
-		s, err := storage.NewLocal(os.Getenv("STORAGE_DIR"))
-		if err != nil {
-			logger.Error("storage init", "err", err)
-			os.Exit(1)
-		}
-		store = s
-	}
-
+	cfg, err := config.Load()
 	if err != nil {
-		logger.Error(err.Error())
+		logger.Error("config", "err", err)
+		os.Exit(1)
 	}
-	defer q.Close()
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	logger.Info("Worker started")
+	q, err := queue.NewSQS(ctx, cfg.SQSQueueURL)
+	if err != nil {
+		logger.Error("queue init", "err", err)
+		os.Exit(1)
+	}
+	defer q.Close()
+
+	store, err := storage.NewS3(ctx, cfg.S3Bucket)
+	if err != nil {
+		logger.Error("storage init", "err", err)
+		os.Exit(1)
+	}
+
+	proc := &worker.Processor{
+		Logger:   logger,
+		Archiver: archiver.NewArchiver(30*time.Second, 10*1024*1024),
+		Storage:  store,
+	}
+
+	logger.Info("Worker started",
+		"queue_url", cfg.SQSQueueURL,
+		"S3_bucket", cfg.S3Bucket)
 
 	for {
-		payload, err := q.Dequeue(ctx)
+		msg, err := q.Dequeue(ctx)
 		if err != nil {
-			if ctx.Err() != nil {
-				logger.Info("Shutting down")
+			if err != ctx.Err() {
+				logger.Error("shutdown")
 				return
 			}
+
+			if errors.Is(err, queue.ErrNoMessage) {
+				continue
+			}
+
 			logger.Error("dequeue", "err", err)
-			time.Sleep(time.Second)
+			select {
+			case <-time.After(time.Second):
+			case <-ctx.Done():
+				return
+			}
 			continue
 		}
-
-		arch := archiver.NewArchiver(30*time.Second, 10*1024*1024)
-		if err := process(ctx, logger, arch, store, payload); err != nil {
-			logger.Error("process job", "err", err)
-			//TODO: dead letter queue, retry
+		if err := proc.Process(ctx, msg); err != nil {
+			if ctx.Err() != nil {
+				logger.Info("shutting down mid-job")
+				return
+			}
+			logger.Error("process", "err", err)
 		}
 	}
-}
-
-func process(ctx context.Context, logger *slog.Logger, arch *archiver.Archiver, store storage.Storage, payload []byte) error {
-	var job queue.Job
-	if err := json.Unmarshal(payload, &job); err != nil {
-		return err
-	}
-	logger.Info("Processing job", "id", job.ID, "url", job.URL)
-
-	result, err := arch.Fetch(ctx, job.URL)
-	if err != nil {
-		logger.Error("Fetch error", "err", err)
-		return err
-	}
-
-	key := job.ID + ".html"
-	if err := store.Put(ctx, key, result.Body, result.ContentType); err != nil {
-		return fmt.Errorf("store: %w", err)
-	}
-
-	logger.Info("archived", "id", job.ID, "url", job.URL, "key", key, "bytes", len(result.Body))
-	return nil
 }

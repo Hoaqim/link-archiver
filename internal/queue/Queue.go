@@ -1,6 +1,9 @@
 package queue
 
-import "context"
+import (
+	"context"
+	"errors"
+)
 
 type Queue interface {
 	Enqueue(ctx context.Context, payload []byte) error
@@ -24,3 +27,5 @@ type Job struct {
 type Req struct {
 	URL string `json:"url"`
 }
+
+var ErrNoMessage = errors.New("queue: no message (long-poll timeout)")
