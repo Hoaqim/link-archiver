@@ -13,11 +13,6 @@ type Local struct {
 	baseDir string
 }
 
-// Exist implements [Storage].
-func (d *Local) Exist(ctx context.Context, key string) (bool, error) {
-	panic("unimplemented")
-}
-
 func NewLocal(baseDir string) (*Local, error) {
 	if err := os.MkdirAll(baseDir, 0o777); err != nil {
 		return nil, fmt.Errorf("creating base dir: %w", err)
