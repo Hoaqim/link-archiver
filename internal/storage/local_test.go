@@ -65,7 +65,7 @@ func TestLocal_GetMissing(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for missing key, got nil")
 	}
-	if !strings.Contains(err.Error(), "read file") {
-		t.Errorf("error = %v, want it to mention 'read file'", err)
+	if !strings.Contains(err.Error(), "storage: not found") {
+		t.Errorf("error = %v, want it to mention 'storage: not found'", err)
 	}
 }

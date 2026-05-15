@@ -43,8 +43,14 @@ func (s *S3) Get(ctx context.Context, key string) ([]byte, string, error) {
 		Key:    aws.String(key),
 	})
 	if err != nil {
-		return nil, "", fmt.Errorf("s3 get: %w", err)
+		var nsk *types.NoSuchKey
+		var nf *types.NotFound
+		if errors.As(err, &nsk) || errors.As(err, &nf) {
+			return nil, "", ErrNotFound
+		}
+		return nil, "", fmt.Errorf("s3 get %s: %w", key, err)
 	}
+
 	defer resp.Body.Close()
 
 	data, err := io.ReadAll(resp.Body)

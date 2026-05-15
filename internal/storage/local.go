@@ -47,6 +47,9 @@ func (d *Local) Get(ctx context.Context, key string) ([]byte, string, error) {
 
 	data, err := os.ReadFile(d.path(key))
 	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, "", ErrNotFound
+		}
 		return nil, "", fmt.Errorf("read file %w", err)
 	}
 

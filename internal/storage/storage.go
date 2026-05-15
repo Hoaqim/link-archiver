@@ -1,6 +1,11 @@
 package storage
 
-import "context"
+import (
+	"context"
+	"errors"
+)
+
+var ErrNotFound = errors.New("storage: not found")
 
 type Storage interface {
 	Put(ctx context.Context, key string, data []byte, contentType string) error
