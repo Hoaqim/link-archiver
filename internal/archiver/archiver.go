@@ -53,7 +53,7 @@ func (a *Archiver) Fetch(ctx context.Context, url string) (*Result, error) {
 		return nil, fmt.Errorf("read body: %w", err)
 	}
 	if int64(len(body)) > a.maxBodySize {
-		return nil, fmt.Errorf("body too big")
+		return nil, fmt.Errorf("exceeds max size")
 	}
 
 	return &Result{
