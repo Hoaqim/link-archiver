@@ -2,6 +2,8 @@ package httpapi
 
 import (
 	"encoding/json"
+	"errors"
+	"io/fs"
 	"net/http"
 
 	"github.com/Hoaqim/link-archiver/internal/queue"
@@ -9,16 +11,12 @@ import (
 )
 
 func (s *Server) Health(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 func (s *Server) Ready(w http.ResponseWriter, r *http.Request) {
 	//TODO: actual checks
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(map[string]string{"status": "ready"})
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ready"})
 }
 
 func (s *Server) CreateJob(w http.ResponseWriter, r *http.Request) {
@@ -51,7 +49,63 @@ func (s *Server) CreateJob(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.Logger.Info("Job enqueued", "id", job.ID)
+	writeJSON(w, http.StatusAccepted, map[string]string{"id": job.ID})
+
+}
+
+func (s *Server) GetJob(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if _, err := uuid.Parse(id); err != nil {
+		http.Error(w, "bad id", http.StatusBadRequest)
+		return
+	}
+
+	data, ct, err := s.Storage.Get(r.Context(), id+".html")
+	if err != nil {
+		if isNotFound(err) {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		s.Logger.Error("storage get", "id", id, "err", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	if ct == "" {
+		ct = "application/octet-stream"
+	}
+	w.Header().Set("Content-Type", ct)
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(data)
+}
+
+func (s *Server) JobStatus(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if _, err := uuid.Parse(id); err != nil {
+		http.Error(w, "invalid id", http.StatusBadRequest)
+		return
+	}
+
+	ok, err := s.Storage.Exists(r.Context(), id+".html")
+	if err != nil {
+		s.Logger.Error("storage exists", "id", id, "err", err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	status := "pending"
+	if ok {
+		status = "done"
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"id": id, "status": status})
+}
+
+func writeJSON(w http.ResponseWriter, status int, body any) {
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusAccepted)
-	json.NewEncoder(w).Encode(map[string]string{"id": job.ID})
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(body)
+}
+
+func isNotFound(err error) bool {
+	return errors.Is(err, fs.ErrNotExist)
 }

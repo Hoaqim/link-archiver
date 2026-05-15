@@ -11,6 +11,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/Hoaqim/link-archiver/internal/storage"
 )
 
 // fakeQueue implements queue.Queue for tests. We only care about Enqueue
@@ -111,5 +113,160 @@ func TestCreateJob_QueueError(t *testing.T) {
 
 	if rr.Code != http.StatusServiceUnavailable {
 		t.Errorf("status = %d, want 503", rr.Code)
+	}
+}
+
+type fakeStorage struct {
+	data        map[string][]byte
+	contentType map[string]string
+	getErr      error
+	existsErr   error
+}
+
+func newFakeStorage() *fakeStorage {
+	return &fakeStorage{
+		data:        map[string][]byte{},
+		contentType: map[string]string{},
+	}
+}
+
+func (f *fakeStorage) Put(ctx context.Context, key string, data []byte, ct string) error {
+	f.data[key] = data
+	f.contentType[key] = ct
+	return nil
+}
+
+func (f *fakeStorage) Get(ctx context.Context, key string) ([]byte, string, error) {
+	if f.getErr != nil {
+		return nil, "", f.getErr
+	}
+	data, ok := f.data[key]
+	if !ok {
+		return nil, "", storage.ErrNotFound
+	}
+	return data, f.contentType[key], nil
+}
+
+func (f *fakeStorage) Exists(ctx context.Context, key string) (bool, error) {
+	if f.existsErr != nil {
+		return false, f.existsErr
+	}
+	_, ok := f.data[key]
+	return ok, nil
+}
+
+const testJobID = "11111111-1111-1111-1111-111111111111"
+
+func newGetJobRequest(t *testing.T, id string) *http.Request {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, "/jobs/"+id, nil)
+	req.SetPathValue("id", id)
+	return req
+}
+
+func newJobStatusRequest(t *testing.T, id string) *http.Request {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, "/jobs/"+id+"/status", nil)
+	req.SetPathValue("id", id)
+	return req
+}
+
+func TestGetJob_Hit(t *testing.T) {
+	fs := newFakeStorage()
+	_ = fs.Put(context.Background(), testJobID+".html", []byte("<h1>hi</h1>"), "text/html")
+
+	s := &Server{Logger: silentLogger(), Storage: fs}
+	rr := httptest.NewRecorder()
+	s.GetJob(rr, newGetJobRequest(t, testJobID))
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rr.Code)
+	}
+	if got := rr.Body.String(); got != "<h1>hi</h1>" {
+		t.Errorf("body = %q, want '<h1>hi</h1>'", got)
+	}
+	if ct := rr.Header().Get("Content-Type"); ct != "text/html" {
+		t.Errorf("Content-Type = %q, want 'text/html'", ct)
+	}
+}
+
+func TestGetJob_InvalidUUID(t *testing.T) {
+	s := &Server{Logger: silentLogger(), Storage: newFakeStorage()}
+	rr := httptest.NewRecorder()
+	s.GetJob(rr, newGetJobRequest(t, "not-a-uuid"))
+
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", rr.Code)
+	}
+}
+
+func TestGetJob_StorageError(t *testing.T) {
+	fs := newFakeStorage()
+	fs.getErr = errors.New("disk on fire")
+	s := &Server{Logger: silentLogger(), Storage: fs}
+	rr := httptest.NewRecorder()
+	s.GetJob(rr, newGetJobRequest(t, testJobID))
+
+	if rr.Code != http.StatusInternalServerError {
+		t.Errorf("status = %d, want 500", rr.Code)
+	}
+}
+
+func TestJobStatus_Done(t *testing.T) {
+	fs := newFakeStorage()
+	_ = fs.Put(context.Background(), testJobID+".html", []byte("x"), "text/html")
+
+	s := &Server{Logger: silentLogger(), Storage: fs}
+	rr := httptest.NewRecorder()
+	s.JobStatus(rr, newJobStatusRequest(t, testJobID))
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rr.Code)
+	}
+	var resp map[string]string
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp["status"] != "done" {
+		t.Errorf("status = %q, want 'done'", resp["status"])
+	}
+}
+
+func TestJobStatus_Pending(t *testing.T) {
+	s := &Server{Logger: silentLogger(), Storage: newFakeStorage()}
+	rr := httptest.NewRecorder()
+	s.JobStatus(rr, newJobStatusRequest(t, testJobID))
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rr.Code)
+	}
+	var resp map[string]string
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if resp["status"] != "pending" {
+		t.Errorf("status = %q, want 'pending'", resp["status"])
+	}
+}
+
+func TestJobStatus_InvalidUUID(t *testing.T) {
+	s := &Server{Logger: silentLogger(), Storage: newFakeStorage()}
+	rr := httptest.NewRecorder()
+	s.JobStatus(rr, newJobStatusRequest(t, "garbage"))
+
+	if rr.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", rr.Code)
+	}
+}
+
+func TestJobStatus_StorageError(t *testing.T) {
+	fs := newFakeStorage()
+	fs.existsErr = errors.New("boom")
+	s := &Server{Logger: silentLogger(), Storage: fs}
+	rr := httptest.NewRecorder()
+	s.JobStatus(rr, newJobStatusRequest(t, testJobID))
+
+	if rr.Code != http.StatusInternalServerError {
+		t.Errorf("status = %d, want 500", rr.Code)
 	}
 }
