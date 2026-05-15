@@ -15,14 +15,9 @@ func TestLoad_Defaults(t *testing.T) {
 	}
 
 	expected := Config{
-		HTTPAddr:       ":8080",
-		RedisAddr:      "localhost:6379",
-		RedisQueueKey:  "queue:jobs",
-		RedisDeadKey:   "queue:jobs:dead",
-		StorageBackend: "local",
-		StorageDir:     "./data",
-		S3Bucket:       "",
-		MaxAttempts:    3,
+		HTTPAddr:    ":8080",
+		S3Bucket:    "",
+		MaxAttempts: 3,
 	}
 
 	if cfg != expected {
