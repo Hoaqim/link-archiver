@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -10,13 +11,21 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
-	"github.com/aws/aws-sdk-go-v2/service/s3/types"
+	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 )
+
+type s3API interface {
+	PutObject(ctx context.Context, params *s3.PutObjectInput, optFns ...func(*s3.Options)) (*s3.PutObjectOutput, error)
+	GetObject(ctx context.Context, params *s3.GetObjectInput, optFns ...func(*s3.Options)) (*s3.GetObjectOutput, error)
+	HeadObject(ctx context.Context, params *s3.HeadObjectInput, optFns ...func(*s3.Options)) (*s3.HeadObjectOutput, error)
+}
 
 type S3 struct {
 	client *s3.Client
 	bucket string
 }
+
+var _ Storage = (*S3)(nil)
 
 func NewS3(ctx context.Context, bucket string) (*S3, error) {
 	if bucket == "" {
@@ -37,15 +46,26 @@ func NewS3(ctx context.Context, bucket string) (*S3, error) {
 	return &S3{client: client, bucket: bucket}, nil
 }
 
+func (s *S3) Put(ctx context.Context, key string, data []byte, contentType string) error {
+	_, err := s.client.PutObject(ctx, &s3.PutObjectInput{
+		Bucket:      aws.String(s.bucket),
+		Key:         aws.String(key),
+		Body:        bytes.NewReader(data),
+		ContentType: aws.String(contentType),
+	})
+	if err != nil {
+		return fmt.Errorf("s3 put %s: %w", key, err)
+	}
+	return nil
+}
+
 func (s *S3) Get(ctx context.Context, key string) ([]byte, string, error) {
 	resp, err := s.client.GetObject(ctx, &s3.GetObjectInput{
 		Bucket: aws.String(s.bucket),
 		Key:    aws.String(key),
 	})
 	if err != nil {
-		var nsk *types.NoSuchKey
-		var nf *types.NotFound
-		if errors.As(err, &nsk) || errors.As(err, &nf) {
+		if isS3NotFound(err) {
 			return nil, "", ErrNotFound
 		}
 		return nil, "", fmt.Errorf("s3 get %s: %w", key, err)
@@ -58,11 +78,7 @@ func (s *S3) Get(ctx context.Context, key string) ([]byte, string, error) {
 		return nil, "", fmt.Errorf("s3 body read: %w", err)
 	}
 
-	ct := ""
-	if resp.ContentType != nil {
-		ct = *resp.ContentType
-	}
-	return data, ct, nil
+	return data, aws.ToString(resp.ContentType), nil
 
 }
 
@@ -75,10 +91,14 @@ func (s *S3) Exists(ctx context.Context, key string) (bool, error) {
 		return true, nil
 	}
 
-	var nf *types.NotFound
-	var nsk *types.NoSuchKey
-	if errors.As(err, &nf) || errors.As(err, &nsk) {
+	if isS3NotFound(err) {
 		return false, nil
 	}
 	return false, fmt.Errorf("s3 head %s: %w", s.bucket, err)
+}
+
+func isS3NotFound(err error) bool {
+	var nsk *s3types.NoSuchKey
+	var nf *s3types.NotFound
+	return errors.As(err, &nsk) || errors.As(err, &nf)
 }

@@ -2,7 +2,6 @@ package config
 
 import (
 	"os"
-	"strings"
 	"testing"
 )
 
@@ -15,9 +14,8 @@ func TestLoad_Defaults(t *testing.T) {
 	}
 
 	expected := Config{
-		HTTPAddr:    ":8080",
-		S3Bucket:    "",
-		MaxAttempts: 3,
+		HTTPAddr: ":8080",
+		S3Bucket: "",
 	}
 
 	if cfg != expected {
@@ -52,19 +50,5 @@ func TestLoad_InvalidBackend(t *testing.T) {
 	expectedErr := `unknown STORAGE_BACKEND "floppy" (want local or s3)`
 	if err.Error() != expectedErr {
 		t.Errorf("expected error %q, got %q", expectedErr, err.Error())
-	}
-}
-
-func TestLoad_BadMaxAttempts(t *testing.T) {
-	os.Clearenv()
-	t.Setenv("MAX_ATTEMPTS", "oops")
-
-	_, err := Load()
-	if err == nil {
-		t.Fatal("expected an error for bad MAX_ATTEMPTS, got nil")
-	}
-
-	if !strings.Contains(err.Error(), "MAX_ATTEMPTS=\"oops\"") {
-		t.Errorf("expected error to contain the parsing failure, got: %v", err)
 	}
 }
