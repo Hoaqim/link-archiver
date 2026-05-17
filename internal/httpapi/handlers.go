@@ -1,12 +1,14 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
-	"io/fs"
 	"net/http"
+	"time"
 
 	"github.com/Hoaqim/link-archiver/internal/queue"
+	"github.com/Hoaqim/link-archiver/internal/storage"
 	"github.com/google/uuid"
 )
 
@@ -14,8 +16,30 @@ func (s *Server) Health(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
+const readyProbeTimeout = 2 * time.Second
+
 func (s *Server) Ready(w http.ResponseWriter, r *http.Request) {
-	//TODO: actual checks
+	ctx, cancel := context.WithTimeout(r.Context(), readyProbeTimeout)
+	defer cancel()
+
+	if err := s.Queue.Ping(ctx); err != nil {
+		s.Logger.Warn("ready: queue unhealthy", "err", err)
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+			"status": "not_ready",
+			"reason": "queue",
+		})
+		return
+	}
+
+	if _, err := s.Storage.Exists(ctx, "__health__"); err != nil {
+		s.Logger.Warn("ready: storage unhealthy", "err", err)
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+			"status": "not_ready",
+			"reason": "storage",
+		})
+		return
+	}
+
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ready"})
 }
 
@@ -62,7 +86,7 @@ func (s *Server) GetJob(w http.ResponseWriter, r *http.Request) {
 
 	data, ct, err := s.Storage.Get(r.Context(), id+".html")
 	if err != nil {
-		if isNotFound(err) {
+		if errors.Is(err, storage.ErrNotFound) {
 			http.Error(w, "not found", http.StatusNotFound)
 			return
 		}
@@ -104,8 +128,4 @@ func writeJSON(w http.ResponseWriter, status int, body any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(body)
-}
-
-func isNotFound(err error) bool {
-	return errors.Is(err, fs.ErrNotExist)
 }
