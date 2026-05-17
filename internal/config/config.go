@@ -14,7 +14,7 @@ type Config struct {
 func Load() (Config, error) {
 	cfg := Config{
 		HTTPAddr:    envOr("HTTP_SERVER_ADDR", ":8080"),
-		SQSQueueURL: os.Getenv("SQS_URL"),
+		SQSQueueURL: os.Getenv("SQS_QUEUE_URL"),
 		S3Bucket:    os.Getenv("S3_BUCKET"),
 	}
 
