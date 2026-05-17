@@ -42,7 +42,7 @@ func (p *Processor) Process(ctx context.Context, msg queue.Message) error {
 	}
 
 	p.Logger.Info("archived", "id", job.ID, "url", job.URL)
-	return nil
+	return msg.Ack(ctx)
 }
 
 func (p *Processor) archive(ctx context.Context, job queue.Job) error {

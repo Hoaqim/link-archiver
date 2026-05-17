@@ -21,7 +21,7 @@ type s3API interface {
 }
 
 type S3 struct {
-	client *s3.Client
+	client s3API
 	bucket string
 }
 

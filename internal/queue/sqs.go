@@ -84,7 +84,7 @@ func (q *SQSQueue) Dequeue(ctx context.Context) (Message, error) {
 	}
 
 	if len(out.Messages) == 0 {
-		return nil, fmt.Errorf("no messages")
+		return nil, ErrNoMessage
 	}
 
 	m := out.Messages[0]
