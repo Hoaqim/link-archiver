@@ -11,5 +11,5 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("POST /jobs", s.CreateJob)
 	mux.HandleFunc("GET /jobs{id}", s.GetJob)
 	mux.HandleFunc("GET /jobs/{id}/status", s.JobStatus)
-	return mux
+	return withMiddleware(s.Logger, mux)
 }

@@ -12,14 +12,14 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Hoaqim/link-archiver/internal/queue"
 	"github.com/Hoaqim/link-archiver/internal/storage"
 )
 
-// fakeQueue implements queue.Queue for tests. We only care about Enqueue
-// for these handler tests; Dequeue/Close just satisfy the interface.
 type fakeQueue struct {
 	enqueued [][]byte
-	err      error // if non-nil, Enqueue returns this
+	err      error
+	pingErr  error
 }
 
 func (f *fakeQueue) Enqueue(ctx context.Context, payload []byte) error {
@@ -29,12 +29,67 @@ func (f *fakeQueue) Enqueue(ctx context.Context, payload []byte) error {
 	f.enqueued = append(f.enqueued, payload)
 	return nil
 }
-func (f *fakeQueue) Dequeue(ctx context.Context) ([]byte, error) { return nil, nil }
-func (f *fakeQueue) Close() error                                { return nil }
+func (f *fakeQueue) Dequeue(ctx context.Context) (queue.Message, error) { return nil, nil }
+func (f *fakeQueue) Ping(ctx context.Context) error                     { return f.pingErr }
+func (f *fakeQueue) Close() error                                       { return nil }
 
-// silentLogger discards log output so test runs aren't noisy.
+type fakeStorage struct {
+	data        map[string][]byte
+	contentType map[string]string
+	getErr      error
+	existsErr   error
+}
+
+func newFakeStorage() *fakeStorage {
+	return &fakeStorage{
+		data:        map[string][]byte{},
+		contentType: map[string]string{},
+	}
+}
+
+func (f *fakeStorage) Put(ctx context.Context, key string, data []byte, ct string) error {
+	f.data[key] = data
+	f.contentType[key] = ct
+	return nil
+}
+
+func (f *fakeStorage) Get(ctx context.Context, key string) ([]byte, string, error) {
+	if f.getErr != nil {
+		return nil, "", f.getErr
+	}
+	data, ok := f.data[key]
+	if !ok {
+		return nil, "", storage.ErrNotFound
+	}
+	return data, f.contentType[key], nil
+}
+
+func (f *fakeStorage) Exists(ctx context.Context, key string) (bool, error) {
+	if f.existsErr != nil {
+		return false, f.existsErr
+	}
+	_, ok := f.data[key]
+	return ok, nil
+}
+
 func silentLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
+
+const testJobID = "11111111-1111-1111-1111-111111111111"
+
+func newGetJobRequest(t *testing.T, id string) *http.Request {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, "/jobs/"+id, nil)
+	req.SetPathValue("id", id)
+	return req
+}
+
+func newJobStatusRequest(t *testing.T, id string) *http.Request {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, "/jobs/"+id+"/status", nil)
+	req.SetPathValue("id", id)
+	return req
 }
 
 func TestHealth(t *testing.T) {
@@ -49,6 +104,59 @@ func TestHealth(t *testing.T) {
 	}
 	if !strings.Contains(rr.Body.String(), `"status":"ok"`) {
 		t.Errorf("body = %q, want it to contain status:ok", rr.Body.String())
+	}
+}
+
+func TestReady_OK(t *testing.T) {
+	s := &Server{
+		Logger:  silentLogger(),
+		Queue:   &fakeQueue{},
+		Storage: newFakeStorage(),
+	}
+	rr := httptest.NewRecorder()
+	s.Ready(rr, httptest.NewRequest(http.MethodGet, "/ready", nil))
+
+	if rr.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200", rr.Code)
+	}
+	if !strings.Contains(rr.Body.String(), `"status":"ready"`) {
+		t.Errorf("body = %q, want status:ready", rr.Body.String())
+	}
+}
+
+func TestReady_QueueDown(t *testing.T) {
+	s := &Server{
+		Logger:  silentLogger(),
+		Queue:   &fakeQueue{pingErr: errors.New("sqs unreachable")},
+		Storage: newFakeStorage(),
+	}
+	rr := httptest.NewRecorder()
+	s.Ready(rr, httptest.NewRequest(http.MethodGet, "/ready", nil))
+
+	if rr.Code != http.StatusServiceUnavailable {
+		t.Errorf("status = %d, want 503", rr.Code)
+	}
+	if !strings.Contains(rr.Body.String(), `"reason":"queue"`) {
+		t.Errorf("body = %q, want reason:queue", rr.Body.String())
+	}
+}
+
+func TestReady_StorageDown(t *testing.T) {
+	fs := newFakeStorage()
+	fs.existsErr = errors.New("s3 unreachable")
+	s := &Server{
+		Logger:  silentLogger(),
+		Queue:   &fakeQueue{},
+		Storage: fs,
+	}
+	rr := httptest.NewRecorder()
+	s.Ready(rr, httptest.NewRequest(http.MethodGet, "/ready", nil))
+
+	if rr.Code != http.StatusServiceUnavailable {
+		t.Errorf("status = %d, want 503", rr.Code)
+	}
+	if !strings.Contains(rr.Body.String(), `"reason":"storage"`) {
+		t.Errorf("body = %q, want reason:storage", rr.Body.String())
 	}
 }
 
@@ -103,72 +211,18 @@ func TestCreateJob_MissingURL(t *testing.T) {
 }
 
 func TestCreateJob_QueueError(t *testing.T) {
-	q := &fakeQueue{err: errors.New("redis down")}
+	q := &fakeQueue{err: errors.New("sqs send failed")}
 	s := &Server{Logger: silentLogger(), Queue: q}
 
 	rr := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/jobs", strings.NewReader(`{"url":"https://example.com"}`))
+	req := httptest.NewRequest(http.MethodPost, "/jobs",
+		strings.NewReader(`{"url":"https://example.com"}`))
 
 	s.CreateJob(rr, req)
 
 	if rr.Code != http.StatusServiceUnavailable {
 		t.Errorf("status = %d, want 503", rr.Code)
 	}
-}
-
-type fakeStorage struct {
-	data        map[string][]byte
-	contentType map[string]string
-	getErr      error
-	existsErr   error
-}
-
-func newFakeStorage() *fakeStorage {
-	return &fakeStorage{
-		data:        map[string][]byte{},
-		contentType: map[string]string{},
-	}
-}
-
-func (f *fakeStorage) Put(ctx context.Context, key string, data []byte, ct string) error {
-	f.data[key] = data
-	f.contentType[key] = ct
-	return nil
-}
-
-func (f *fakeStorage) Get(ctx context.Context, key string) ([]byte, string, error) {
-	if f.getErr != nil {
-		return nil, "", f.getErr
-	}
-	data, ok := f.data[key]
-	if !ok {
-		return nil, "", storage.ErrNotFound
-	}
-	return data, f.contentType[key], nil
-}
-
-func (f *fakeStorage) Exists(ctx context.Context, key string) (bool, error) {
-	if f.existsErr != nil {
-		return false, f.existsErr
-	}
-	_, ok := f.data[key]
-	return ok, nil
-}
-
-const testJobID = "11111111-1111-1111-1111-111111111111"
-
-func newGetJobRequest(t *testing.T, id string) *http.Request {
-	t.Helper()
-	req := httptest.NewRequest(http.MethodGet, "/jobs/"+id, nil)
-	req.SetPathValue("id", id)
-	return req
-}
-
-func newJobStatusRequest(t *testing.T, id string) *http.Request {
-	t.Helper()
-	req := httptest.NewRequest(http.MethodGet, "/jobs/"+id+"/status", nil)
-	req.SetPathValue("id", id)
-	return req
 }
 
 func TestGetJob_Hit(t *testing.T) {
@@ -187,6 +241,16 @@ func TestGetJob_Hit(t *testing.T) {
 	}
 	if ct := rr.Header().Get("Content-Type"); ct != "text/html" {
 		t.Errorf("Content-Type = %q, want 'text/html'", ct)
+	}
+}
+
+func TestGetJob_Miss(t *testing.T) {
+	s := &Server{Logger: silentLogger(), Storage: newFakeStorage()}
+	rr := httptest.NewRecorder()
+	s.GetJob(rr, newGetJobRequest(t, testJobID))
+
+	if rr.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want 404", rr.Code)
 	}
 }
 
